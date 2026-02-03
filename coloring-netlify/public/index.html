@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cozy Coloring Studio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    body { margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+    
+    // Icon components using Lucide
+    const Icon = ({ name, size = 24, className = "" }) => {
+      const iconRef = useRef(null);
+      useEffect(() => {
+        if (iconRef.current) {
+          iconRef.current.innerHTML = '';
+          const icon = lucide.createElement(lucide.icons[name]);
+          icon.setAttribute('width', size);
+          icon.setAttribute('height', size);
+          iconRef.current.appendChild(icon);
+        }
+      }, [name, size]);
+      return <span ref={iconRef} className={className} style={{display: 'inline-flex', verticalAlign: 'middle'}} />;
+    };
+
+    const CozyColoringApp = () => {
+      const canvasRef = useRef(null);
+      const colorWheelRef = useRef(null);
+      const lineWorkRef = useRef(null);
+      const fileInputRef = useRef(null);
+      const [ctx, setCtx] = useState(null);
+      const [mode, setMode] = useState('fill');
+      const [currentColor, setCurrentColor] = useState('#FF6B9D');
+      const [hue, setHue] = useState(340);
+      const [saturation, setSaturation] = useState(100);
+      const [lightness, setLightness] = useState(70);
+      const [isDrawing, setIsDrawing] = useState(false);
+      const [brushSize, setBrushSize] = useState(15);
+      const [eraserSize, setEraserSize] = useState(20);
+      const [imageData, setImageData] = useState(null);
+      const [history, setHistory] = useState([]);
+      const [currentImageName, setCurrentImageName] = useState('Upload or generate a coloring page');
+      const [isDragging, setIsDragging] = useState(false);
+      const [isGenerating, setIsGenerating] = useState(false);
+      const [aiPrompt, setAiPrompt] = useState('');
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const context = canvas.getContext('2d', { willReadFrequently: true });
+          setCtx(context);
+          
+          context.fillStyle = 'white';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          const imgData = context.getImageData(0, 0, canvas.width, canvas.height);
+          setImageData(imgData);
+          lineWorkRef.current = imgData;
+          setHistory([imgData]);
+        }
+        
+        const colorWheel = colorWheelRef.current;
+        if (colorWheel) {
+          const wheelCtx = colorWheel.getContext('2d');
+          const centerX = colorWheel.width / 2;
+          const centerY = colorWheel.height / 2;
+          const radius = colorWheel.width / 2 - 5;
+          
+          for (let angle = 0; angle < 360; angle++) {
+            const startAngle = (angle - 90) * Math.PI / 180;
+            const endAngle = (angle + 1 - 90) * Math.PI / 180;
+            
+            wheelCtx.beginPath();
+            wheelCtx.moveTo(centerX, centerY);
+            wheelCtx.arc(centerX, centerY, radius, startAngle, endAngle);
+            wheelCtx.closePath();
+            wheelCtx.fillStyle = `hsl(${angle}, 100%, 50%)`;
+            wheelCtx.fill();
+          }
+          
+          wheelCtx.beginPath();
+          wheelCtx.arc(centerX, centerY, radius * 0.3, 0, Math.PI * 2);
+          wheelCtx.fillStyle = 'white';
+          wheelCtx.fill();
+          wheelCtx.strokeStyle = '#ccc';
+          wheelCtx.lineWidth = 2;
+          wheelCtx.stroke();
+        }
+      }, []);
+
+      const hslToHex = (h, s, l) => {
+        s /= 100;
+        l /= 100;
+        const a = s * Math.min(l, 1 - l);
+        const f = (n) => {
+          const k = (n + h / 30) % 12;
+          const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+          return Math.round(255 * color).toString(16).padStart(2, '0');
+        };
+        return `#${f(0)}${f(8)}${f(4)}`;
+      };
+
+      const handleColorWheelClick = (e) => {
+        const colorWheel = colorWheelRef.current;
+        const rect = colorWheel.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const centerX = colorWheel.width / 2;
+        const centerY = colorWheel.height / 2;
+        
+        const dx = x - centerX;
+        const dy = y - centerY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const radius = colorWheel.width / 2 - 5;
+        
+        if (distance <= radius * 0.3) {
+          setHue(0);
+          setSaturation(0);
+          setLightness(95);
+          setCurrentColor(hslToHex(0, 0, 95));
+        } else if (distance <= radius) {
+          let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+          angle = (angle + 90 + 360) % 360;
+          
+          setHue(Math.round(angle));
+          setSaturation(100);
+          setLightness(50);
+          setCurrentColor(hslToHex(Math.round(angle), 100, 50));
+        }
+      };
+
+      useEffect(() => {
+        const hex = hslToHex(hue, saturation, lightness);
+        setCurrentColor(hex);
+      }, [hue, saturation, lightness]);
+
+      const saveToHistory = () => {
+        if (!ctx || !canvasRef.current) return;
+        const imgData = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
+        setHistory(prev => [...prev, imgData]);
+      };
+
+      const undo = () => {
+        if (history.length <= 1) return;
+        
+        const newHistory = [...history];
+        newHistory.pop();
+        setHistory(newHistory);
+        
+        const previousState = newHistory[newHistory.length - 1];
+        if (ctx && previousState) {
+          ctx.putImageData(previousState, 0, 0);
+          setImageData(previousState);
+        }
+      };
+
+      const isBlackPixel = (data, index) => {
+        const r = data[index];
+        const g = data[index + 1];
+        const b = data[index + 2];
+        return r === 0 && g === 0 && b === 0;
+      };
+
+      const protectLinework = (newImageData) => {
+        if (!lineWorkRef.current) return newImageData;
+        
+        const linework = lineWorkRef.current.data;
+        const newData = newImageData.data;
+        
+        for (let i = 0; i < linework.length; i += 4) {
+          if (isBlackPixel(linework, i)) {
+            newData[i] = 0;
+            newData[i + 1] = 0;
+            newData[i + 2] = 0;
+            newData[i + 3] = 255;
+          }
+        }
+        
+        return newImageData;
+      };
+
+      const getColorAtPoint = (x, y) => {
+        if (!ctx || !imageData) return null;
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const canvasX = Math.floor((x - rect.left) * scaleX);
+        const canvasY = Math.floor((y - rect.top) * scaleY);
+        
+        const index = (canvasY * canvas.width + canvasX) * 4;
+        return {
+          r: imageData.data[index],
+          g: imageData.data[index + 1],
+          b: imageData.data[index + 2],
+          a: imageData.data[index + 3]
+        };
+      };
+
+      const hexToRgb = (hex) => {
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? {
+          r: parseInt(result[1], 16),
+          g: parseInt(result[2], 16),
+          b: parseInt(result[3], 16)
+        } : null;
+      };
+
+      const floodFill = (startX, startY, fillColor) => {
+        if (!ctx || !imageData) return;
+        
+        const canvas = canvasRef.current;
+        const targetColor = getColorAtPoint(startX, startY);
+        if (!targetColor) return;
+        
+        if (targetColor.r === 0 && targetColor.g === 0 && targetColor.b === 0) {
+          return;
+        }
+        
+        const fillRgb = hexToRgb(fillColor);
+        if (!fillRgb) return;
+        
+        if (targetColor.r === fillRgb.r && targetColor.g === fillRgb.g && targetColor.b === fillRgb.b) {
+          return;
+        }
+        
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = Math.floor((startX - rect.left) * scaleX);
+        const y = Math.floor((startY - rect.top) * scaleY);
+        
+        const newImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const pixels = newImageData.data;
+        const stack = [[x, y]];
+        const visited = new Set();
+        
+        const colorMatch = (index) => {
+          return pixels[index] === targetColor.r &&
+                 pixels[index + 1] === targetColor.g &&
+                 pixels[index + 2] === targetColor.b &&
+                 pixels[index + 3] === targetColor.a;
+        };
+        
+        while (stack.length > 0) {
+          const [cx, cy] = stack.pop();
+          const key = `${cx},${cy}`;
+          
+          if (visited.has(key)) continue;
+          if (cx < 0 || cx >= canvas.width || cy < 0 || cy >= canvas.height) continue;
+          
+          const index = (cy * canvas.width + cx) * 4;
+          
+          if (!colorMatch(index)) continue;
+          if (isBlackPixel(pixels, index)) continue;
+          
+          visited.add(key);
+          pixels[index] = fillRgb.r;
+          pixels[index + 1] = fillRgb.g;
+          pixels[index + 2] = fillRgb.b;
+          pixels[index + 3] = 255;
+          
+          stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
+        }
+        
+        const protectedData = protectLinework(newImageData);
+        ctx.putImageData(protectedData, 0, 0);
+        setImageData(protectedData);
+        saveToHistory();
+      };
+
+      const handleCanvasClick = (e) => {
+        if (mode === 'fill') {
+          floodFill(e.clientX, e.clientY, currentColor);
+        }
+      };
+
+      const handleMouseDown = (e) => {
+        if (mode === 'brush' || mode === 'eraser') {
+          setIsDrawing(true);
+          draw(e);
+        }
+      };
+
+      const handleMouseMove = (e) => {
+        if ((mode === 'brush' || mode === 'eraser') && isDrawing) {
+          draw(e);
+        }
+      };
+
+      const handleMouseUp = () => {
+        if (isDrawing) {
+          setIsDrawing(false);
+          saveToHistory();
+        }
+      };
+
+      const draw = (e) => {
+        if (!ctx) return;
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = (e.clientX - rect.left) * scaleX;
+        const y = (e.clientY - rect.top) * scaleY;
+        
+        if (mode === 'eraser') {
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.fillStyle = 'rgba(0,0,0,1)';
+          ctx.beginPath();
+          ctx.arc(x, y, eraserSize, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalCompositeOperation = 'source-over';
+          
+          const newData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const protectedData = protectLinework(newData);
+          ctx.putImageData(protectedData, 0, 0);
+          setImageData(protectedData);
+        } else {
+          ctx.fillStyle = currentColor;
+          ctx.beginPath();
+          ctx.arc(x, y, brushSize, 0, Math.PI * 2);
+          ctx.fill();
+          
+          const newData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const protectedData = protectLinework(newData);
+          ctx.putImageData(protectedData, 0, 0);
+          setImageData(protectedData);
+        }
+      };
+
+      const resetCanvas = () => {
+        if (!ctx || !lineWorkRef.current || !canvasRef.current) return;
+        ctx.putImageData(lineWorkRef.current, 0, 0);
+        setImageData(lineWorkRef.current);
+        setHistory([lineWorkRef.current]);
+      };
+
+      const downloadImage = () => {
+        const canvas = canvasRef.current;
+        const link = document.createElement('a');
+        link.download = `cozy-coloring-${Date.now()}.png`;
+        link.href = canvas.toDataURL();
+        link.click();
+      };
+
+      const handleDragOver = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(true);
+      };
+      
+      const handleDragLeave = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+      };
+      
+      const handleDrop = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+        
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+          const file = files[0];
+          if (file.type.startsWith('image/')) {
+            processImageFile(file);
+          }
+        }
+      };
+      
+      const loadImageToCanvas = (imageSource, name) => {
+        if (!ctx || !canvasRef.current) return;
+        
+        const img = new Image();
+        img.onload = () => {
+          const canvas = canvasRef.current;
+          const context = ctx;
+          
+          context.fillStyle = 'white';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          
+          const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+          const drawWidth = img.width * scale;
+          const drawHeight = img.height * scale;
+          const x = (canvas.width - drawWidth) / 2;
+          const y = (canvas.height - drawHeight) / 2;
+          
+          context.drawImage(img, x, y, drawWidth, drawHeight);
+          
+          const imgDataObj = context.getImageData(0, 0, canvas.width, canvas.height);
+          const pixels = imgDataObj.data;
+          
+          for (let i = 0; i < pixels.length; i += 4) {
+            const avg = (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+            const val = avg > 180 ? 255 : 0;
+            pixels[i] = val;
+            pixels[i + 1] = val;
+            pixels[i + 2] = val;
+            pixels[i + 3] = 255;
+          }
+          
+          context.putImageData(imgDataObj, 0, 0);
+          
+          const linework = context.getImageData(0, 0, canvas.width, canvas.height);
+          lineWorkRef.current = linework;
+          setImageData(linework);
+          setHistory([linework]);
+          setCurrentImageName(name);
+        };
+        img.src = imageSource;
+      };
+      
+      const processImageFile = (file) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          loadImageToCanvas(event.target.result, file.name.replace(/\.[^/.]+$/, ''));
+        };
+        reader.readAsDataURL(file);
+      };
+
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        processImageFile(file);
+      };
+      
+      const generateAIImage = async () => {
+        if (!aiPrompt.trim() || isGenerating) return;
+        
+        setIsGenerating(true);
+        setError(null);
+        
+        try {
+          const response = await fetch('/.netlify/functions/generate-image', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ prompt: aiPrompt }),
+          });
+          
+          const data = await response.json();
+          
+          if (!response.ok) {
+            throw new Error(data.error || 'Failed to generate image');
+          }
+          
+          if (data.success && data.imageData) {
+            loadImageToCanvas(`data:image/png;base64,${data.imageData}`, aiPrompt);
+            setAiPrompt('');
+          } else {
+            throw new Error('No image data received');
+          }
+        } catch (err) {
+          console.error('Generation error:', err);
+          setError(err.message);
+        } finally {
+          setIsGenerating(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-amber-50 to-rose-50 p-4 md:p-8">
+          <div className="max-w-7xl mx-auto">
+            <div className="text-center mb-6">
+              <h1 className="text-3xl md:text-4xl font-bold text-amber-900 mb-2">Cozy Coloring Studio</h1>
+              <p className="text-amber-700">Relax and color beautiful designs</p>
+            </div>
+            
+            {/* Top Tool Bar */}
+            <div className="bg-white rounded-2xl shadow-lg p-4 mb-4">
+              <div className="flex flex-wrap items-center gap-4 justify-center">
+                {/* Mode Buttons */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setMode('fill')}
+                    className={`flex items-center gap-1 px-4 py-2 rounded-lg transition-all text-sm ${
+                      mode === 'fill'
+                        ? 'bg-amber-500 text-white shadow-md'
+                        : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                    }`}
+                  >
+                    <Icon name="Droplet" size={16} />
+                    Fill
+                  </button>
+                  <button
+                    onClick={() => setMode('brush')}
+                    className={`flex items-center gap-1 px-4 py-2 rounded-lg transition-all text-sm ${
+                      mode === 'brush'
+                        ? 'bg-amber-500 text-white shadow-md'
+                        : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                    }`}
+                  >
+                    <Icon name="Paintbrush" size={16} />
+                    Brush
+                  </button>
+                  <button
+                    onClick={() => setMode('eraser')}
+                    className={`flex items-center gap-1 px-4 py-2 rounded-lg transition-all text-sm ${
+                      mode === 'eraser'
+                        ? 'bg-amber-500 text-white shadow-md'
+                        : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                    }`}
+                  >
+                    <Icon name="Eraser" size={16} />
+                    Erase
+                  </button>
+                </div>
+                
+                {/* Brush/Eraser Size */}
+                {mode === 'brush' && (
+                  <div className="w-36 flex items-center gap-2">
+                    <span className="text-xs text-amber-700">Size:</span>
+                    <input
+                      type="range"
+                      min="5"
+                      max="50"
+                      value={brushSize}
+                      onChange={(e) => setBrushSize(Number(e.target.value))}
+                      className="flex-1 h-2"
+                    />
+                    <span className="text-xs text-amber-700 w-8">{brushSize}px</span>
+                  </div>
+                )}
+                {mode === 'eraser' && (
+                  <div className="w-36 flex items-center gap-2">
+                    <span className="text-xs text-amber-700">Size:</span>
+                    <input
+                      type="range"
+                      min="10"
+                      max="80"
+                      value={eraserSize}
+                      onChange={(e) => setEraserSize(Number(e.target.value))}
+                      className="flex-1 h-2"
+                    />
+                    <span className="text-xs text-amber-700 w-8">{eraserSize}px</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            <div className="grid md:grid-cols-[1fr,280px] gap-4">
+              {/* Canvas */}
+              <div 
+                className={`bg-white rounded-2xl shadow-lg p-4 relative ${isDragging ? 'ring-4 ring-indigo-400 ring-opacity-50' : ''}`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                {isDragging && (
+                  <div className="absolute inset-0 bg-indigo-100 bg-opacity-90 rounded-2xl flex items-center justify-center z-10">
+                    <div className="text-center">
+                      <Icon name="Sparkles" size={48} className="mx-auto text-indigo-500 mb-2" />
+                      <p className="text-xl font-semibold text-indigo-700">Drop image here</p>
+                      <p className="text-sm text-indigo-500">Release to load coloring page</p>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold text-amber-900 truncate">
+                    {currentImageName}
+                  </h3>
+                  <div className="text-sm text-amber-600 whitespace-nowrap ml-2">
+                    {mode === 'fill' ? '🎨 Fill' : mode === 'brush' ? '🖌️ Brush' : '🧹 Erase'}
+                  </div>
+                </div>
+                <canvas
+                  ref={canvasRef}
+                  width={700}
+                  height={600}
+                  onClick={handleCanvasClick}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseLeave={handleMouseUp}
+                  className="w-full border-2 border-amber-200 rounded-lg cursor-crosshair bg-white"
+                />
+                {currentImageName === 'Upload or generate a coloring page' && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{top: '60px'}}>
+                    <div className="text-center text-amber-400">
+                      <p className="text-lg">Drag & drop an image here</p>
+                      <p className="text-sm">or use AI generate / upload</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Side Panel */}
+              <div className="bg-white rounded-2xl shadow-lg p-4 space-y-4">
+                {/* Color Picker Section */}
+                <div className="space-y-3">
+                  <h3 className="font-semibold text-amber-900 text-sm">Color Picker</h3>
+                  <div className="flex items-center gap-3 justify-center">
+                    <canvas
+                      ref={colorWheelRef}
+                      width={200}
+                      height={200}
+                      onClick={handleColorWheelClick}
+                      className="w-20 h-20 cursor-pointer rounded-lg border-2 border-amber-200"
+                    />
+                    <div className="flex flex-col items-center">
+                      <div 
+                        className="w-14 h-14 rounded-lg border-2 border-amber-300 shadow-inner"
+                        style={{ backgroundColor: currentColor }}
+                      />
+                      <div className="mt-1 text-xs font-mono text-amber-700">{currentColor}</div>
+                    </div>
+                  </div>
+                  
+                  {/* Sliders */}
+                  <div className="space-y-2">
+                    <div>
+                      <div className="flex justify-between text-xs text-amber-700 mb-1">
+                        <span>Hue</span>
+                        <span>{hue}°</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="360"
+                        value={hue}
+                        onChange={(e) => setHue(Number(e.target.value))}
+                        className="w-full h-2"
+                        style={{
+                          background: `linear-gradient(to right, 
+                            hsl(0, 100%, 50%), hsl(60, 100%, 50%), hsl(120, 100%, 50%), 
+                            hsl(180, 100%, 50%), hsl(240, 100%, 50%), hsl(300, 100%, 50%), hsl(360, 100%, 50%))`
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-xs text-amber-700 mb-1">
+                        <span>Saturation</span>
+                        <span>{saturation}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={saturation}
+                        onChange={(e) => setSaturation(Number(e.target.value))}
+                        className="w-full h-2"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-xs text-amber-700 mb-1">
+                        <span>Lightness</span>
+                        <span>{lightness}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={lightness}
+                        onChange={(e) => setLightness(Number(e.target.value))}
+                        className="w-full h-2"
+                      />
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="pt-3 border-t border-amber-200 space-y-2">
+                  <button
+                    onClick={undo}
+                    disabled={history.length <= 1}
+                    className={`w-full flex items-center justify-center gap-2 p-2 rounded-lg transition-all text-sm ${
+                      history.length <= 1
+                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        : 'bg-blue-500 text-white hover:bg-blue-600'
+                    }`}
+                  >
+                    <Icon name="Undo2" size={16} />
+                    Undo ({history.length - 1})
+                  </button>
+                  <button
+                    onClick={resetCanvas}
+                    className="w-full flex items-center justify-center gap-2 bg-amber-500 text-white p-2 rounded-lg hover:bg-amber-600 transition-all text-sm"
+                  >
+                    <Icon name="RotateCcw" size={16} />
+                    Reset Colors
+                  </button>
+                  <button
+                    onClick={downloadImage}
+                    className="w-full flex items-center justify-center gap-2 bg-emerald-500 text-white p-2 rounded-lg hover:bg-emerald-600 transition-all text-sm"
+                  >
+                    <Icon name="Download" size={16} />
+                    Download
+                  </button>
+                </div>
+
+                {/* AI Generate Section */}
+                <div className="pt-3 border-t border-amber-200">
+                  <h3 className="font-semibold text-amber-900 mb-2 text-sm">✨ AI Generate</h3>
+                  <textarea
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    placeholder="Describe a coloring page... (e.g., 'a cute cat playing with yarn')"
+                    className="w-full p-2 border-2 border-amber-200 rounded-lg text-sm resize-none focus:outline-none focus:border-amber-400"
+                    rows={2}
+                    disabled={isGenerating}
+                  />
+                  <button
+                    onClick={generateAIImage}
+                    disabled={!aiPrompt.trim() || isGenerating}
+                    className={`w-full mt-2 flex items-center justify-center gap-2 p-2 rounded-lg transition-all text-sm ${
+                      !aiPrompt.trim() || isGenerating
+                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-purple-500 to-pink-500 text-white hover:from-purple-600 hover:to-pink-600'
+                    }`}
+                  >
+                    <Icon name="Wand2" size={16} />
+                    {isGenerating ? 'Generating...' : 'Generate'}
+                  </button>
+                  {error && (
+                    <p className="mt-2 text-xs text-red-500">{error}</p>
+                  )}
+                </div>
+
+                {/* Upload Section */}
+                <div className="pt-3 border-t border-amber-200">
+                  <h3 className="font-semibold text-amber-900 mb-2 text-sm">📁 Upload Image</h3>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleImageUpload}
+                    accept="image/*"
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full flex items-center justify-center gap-2 p-2 rounded-lg transition-all bg-indigo-500 text-white hover:bg-indigo-600 text-sm"
+                  >
+                    <Icon name="Upload" size={16} />
+                    Upload Image
+                  </button>
+                </div>
+
+                <div className="text-xs text-amber-600 text-center pt-2 border-t border-amber-200">
+                  <strong>Fill:</strong> Click areas • <strong>Brush:</strong> Paint • <strong>Erase:</strong> Remove
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<CozyColoringApp />);
+  </script>
+</body>
+</html>
