@@ -34,61 +34,46 @@ exports.handler = async (event, context) => {
       apiKey: apiKey,
     });
 
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1024,
-      messages: [
-        {
-          role: "user",
-          content: `Generate a coloring book page image for: ${prompt}
-
-Style: Black and white line art coloring page for adults. Clean black outlines on pure white background. Detailed and intricate but with clear spaces to color. Professional illustration quality. No shading or gray tones - only black lines on white.`,
-        },
-      ],
-      tools: [
-        {
-          name: "image_generation",
-          type: "image_generation_2025_04_14",
-        },
-      ],
+    // Use the images.generate endpoint for image generation
+    const response = await client.images.generate({
+      model: "claude-3-5-sonnet-20241022",
+      prompt: `Create a black and white coloring book page for adults: ${prompt}. Style: Clean black outlines on pure white background. Detailed line art with clear spaces to color. Professional illustration quality. No shading, no gray tones - only black lines on white. Make it intricate but with distinct areas to fill in with color.`,
     });
 
-    // Find the image in the response
-    let imageData = null;
-    for (const block of response.content) {
-      if (block.type === "image") {
-        imageData = block.source?.data;
-        break;
-      }
-    }
-
-    if (!imageData) {
-      // Check if there's a text response explaining why
-      const textBlock = response.content.find((b) => b.type === "text");
+    // Get the base64 image data from the response
+    if (response.images && response.images.length > 0) {
+      const imageData = response.images[0].base64;
+      
+      return {
+        statusCode: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          success: true,
+          imageData: imageData,
+        }),
+      };
+    } else {
       return {
         statusCode: 400,
         body: JSON.stringify({
-          error: textBlock?.text || "No image was generated",
+          error: "No image was generated",
         }),
       };
     }
-
-    return {
-      statusCode: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        success: true,
-        imageData: imageData,
-      }),
-    };
   } catch (error) {
     console.error("Error:", error);
+    
+    // Check if it's an API error with more details
+    const errorMessage = error.message || "Failed to generate image";
+    const statusCode = error.status || 500;
+    
     return {
-      statusCode: 500,
+      statusCode: statusCode,
       body: JSON.stringify({
-        error: error.message || "Failed to generate image",
+        error: errorMessage,
+        details: error.error?.message || null
       }),
     };
   }
